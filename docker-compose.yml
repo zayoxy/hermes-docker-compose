@@ -4,6 +4,7 @@
 #
 # Quick start:
 #   docker compose up -d
+#   docker compose exec ollama ollama pull gpt-oss:20b
 #   docker compose exec gateway hermes setup
 #
 # Environment (.env file in same directory):
@@ -13,6 +14,10 @@
 #   DASHBOARD_AUTH_USERNAME - Dashboard login username
 #   DASHBOARD_AUTH_PASSWORD - Dashboard login password
 #   DASHBOARD_AUTH_SECRET   - Session signing secret (keep stable across restarts)
+#   OLLAMA_DATA_DIR         - Host path for Ollama models (default: ~/.ollama)
+#   OLLAMA_PORT             - Host port for the Ollama API (default: 11434)
+#   OLLAMA_CONTEXT_LENGTH   - Default model context window (default: 65536)
+#   OLLAMA_KEEP_ALIVE       - How long to keep a model loaded (default: 30m)
 # =============================================================================
 
 services:
@@ -61,21 +66,55 @@ services:
       - hermes-net
 
   # ---------------------------------------------------------------------------
-  # Watchtower (opt-in) — auto-update hermes containers
+  # Ollama — local model inference server (OpenAI-compatible API)
   # ---------------------------------------------------------------------------
-  # Uncomment the block below to enable automatic image updates via Watchtower.
-  # It will watch every container on this compose project and pull new images
-  # when available, then restart them seamlessly.
-  #
-  # watchtower:
-  #   image: containrrr/watchtower:latest
-  #   container_name: hermes-watchtower
-  #   restart: unless-stopped
-  #   command: --label-enable --cleanup
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #   networks:
-  #     - hermes-net
+  # Hermes reaches this service internally at http://ollama:11434/v1.
+  # The published port is bound to loopback because Ollama has no auth.
+  # GPU access uses CDI: Docker Engine 28.3+ or Podman with a generated
+  # /etc/cdi/nvidia.yaml. Remove the devices line to run on CPU only.
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: hermes-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ${OLLAMA_DATA_DIR:-${HOME:-/root}/.ollama}:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_CONTEXT_LENGTH: "${OLLAMA_CONTEXT_LENGTH:-65536}"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: "q8_0"
+    networks:
+      - hermes-net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    devices:
+      - nvidia.com/gpu=all
+
+# ---------------------------------------------------------------------------
+# Watchtower (opt-in) — auto-update hermes containers
+# ---------------------------------------------------------------------------
+# Uncomment the block below to enable automatic image updates via Watchtower.
+# It will watch every container on this compose project and pull new images
+# when available, then restart them seamlessly.
+#
+# watchtower:
+#   image: containrrr/watchtower:latest
+#   container_name: hermes-watchtower
+#   restart: unless-stopped
+#   command: --label-enable --cleanup
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock
+#   networks:
+#     - hermes-net
 
 networks:
   hermes-net:
